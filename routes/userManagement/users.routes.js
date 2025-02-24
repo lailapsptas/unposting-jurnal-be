@@ -1,13 +1,13 @@
-// routes/userManagement/users.routes.js
 import express from "express";
 import { UsersControllers } from "../../controllers/userManagement/users.controllers.js";
+import { middleware } from "../../middleware/auth.js";
 
 const router = express.Router();
 
-router.post("/", UsersControllers.create);
-router.get("/", UsersControllers.findAll);
-router.get("/:id", UsersControllers.findById);
-router.put("/:id", UsersControllers.update);
-router.delete("/:id", UsersControllers.delete);
+router.post("/", middleware.admin, UsersControllers.create);
+router.get("/", middleware.login, UsersControllers.findAll);
+router.get("/:id", middleware.login, UsersControllers.findById);
+router.put("/:id", middleware.admin, UsersControllers.update);
+router.delete("/:id", middleware.admin, UsersControllers.delete);
 
 export default router;

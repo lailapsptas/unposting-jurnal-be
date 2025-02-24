@@ -1,107 +1,213 @@
-// services/userManagement/users.services.js
 import db from "../../db/knex.js";
+import bcrypt from "bcryptjs";
 
 export class UsersService {
   async create(data) {
     try {
-      const { username, fullname, email, password, role_id, jobPosition_id } =
+      const { username, full_name, email, password, role_id, jobPosition_id } =
         data;
+      const saltRounds = 15;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
+
       const query = `
-        INSERT INTO Users (username, fullname, email, password, role_id, jobPosition_id)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO "Users" (username, full_name, email, password, role_id, "jobPosition_id", "createdAt")
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         RETURNING *
       `;
 
       const result = await db.raw(query, [
         username,
-        fullname,
+        full_name,
         email,
-        password,
+        hashedPassword,
         role_id,
         jobPosition_id,
       ]);
-      return result.rows[0];
+
+      return {
+        status: "success",
+        message: "User created successfully",
+        data: result.rows[0],
+      };
     } catch (error) {
-      throw new Error(`Error creating user: ${error.message}`);
+      return {
+        status: "error",
+        message: `Error creating user: ${error.message}`,
+      };
     }
   }
 
   async findAll() {
     try {
       const query = `
-        SELECT * FROM Users
-        ORDER BY id ASC
+        SELECT "Users".*, "Roles".name AS role_name, "JobPositions".title AS job_position_title
+        FROM "Users" 
+        LEFT JOIN "Roles" ON "Users".role_id = "Roles".id
+        LEFT JOIN "JobPositions" ON "Users"."jobPosition_id" = "JobPositions".id
+        ORDER BY "Users".id ASC
       `;
 
       const result = await db.raw(query);
-      return result.rows;
+      return {
+        status: "success",
+        message: "Users fetched successfully",
+        data: result.rows,
+      };
     } catch (error) {
-      throw new Error(`Error fetching users: ${error.message}`);
+      return {
+        status: "error",
+        message: `Error fetching users: ${error.message}`,
+      };
     }
   }
 
   async findById(id) {
     try {
       const query = `
-        SELECT * FROM Users
-        WHERE id = ?
+        SELECT "Users".*, "Roles".name AS role_name, "JobPositions".title AS job_position_title
+        FROM "Users" 
+        LEFT JOIN "Roles" ON "Users".role_id = "Roles".id
+        LEFT JOIN "JobPositions" ON "Users"."jobPosition_id" = "JobPositions".id
+        WHERE "Users".id = ?
       `;
 
       const result = await db.raw(query, [id]);
-      return result.rows[0];
+
+      if (!result.rows[0]) {
+        return {
+          status: "error",
+          message: "User not found",
+          data: null,
+        };
+      }
+
+      return {
+        status: "success",
+        message: "User fetched successfully",
+        data: result.rows[0],
+      };
     } catch (error) {
-      throw new Error(`Error fetching user: ${error.message}`);
+      return {
+        status: "error",
+        message: `Error fetching user: ${error.message}`,
+      };
+    }
+  }
+
+  async findByEmail(email) {
+    try {
+      const query = `SELECT * FROM "Users" WHERE email = ?`;
+      const result = await db.raw(query, [email]);
+
+      return {
+        status: "success",
+        message: "User fetched successfully",
+        data: result.rows[0],
+      };
+    } catch (error) {
+      return {
+        status: "error",
+        message: `Error fetching user by email: ${error.message}`,
+      };
     }
   }
 
   async update(id, data) {
     try {
-      const { username, fullname, email, password, role_id, jobPosition_id } =
-        data;
+      const updateFields = [];
+      const values = [];
+
+      if (data.username) {
+        updateFields.push(`username = ?`);
+        values.push(data.username);
+      }
+      if (data.full_name) {
+        updateFields.push(`full_name = ?`);
+        values.push(data.full_name);
+      }
+      if (data.email) {
+        updateFields.push(`email = ?`);
+        values.push(data.email);
+      }
+      if (data.password) {
+        const saltRounds = 15;
+        const hashedPassword = await bcrypt.hash(data.password, saltRounds);
+        updateFields.push(`password = ?`);
+        values.push(hashedPassword);
+      }
+      if (data.role_id) {
+        updateFields.push(`role_id = ?`);
+        values.push(data.role_id);
+      }
+      if (data.jobPosition_id) {
+        updateFields.push(`"jobPosition_id" = ?`);
+        values.push(data.jobPosition_id);
+      }
+
+      updateFields.push(`"updatedAt" = CURRENT_TIMESTAMP`);
+
+      if (updateFields.length === 0) {
+        return {
+          status: "error",
+          message: "No fields to update",
+        };
+      }
+
       const query = `
-        UPDATE Users
-        SET username = ?, fullname = ?, email = ?, password = ?, role_id = ?, jobPosition_id = ?, updated_at = CURRENT_TIMESTAMP
+        UPDATE "Users" 
+        SET ${updateFields.join(", ")}
         WHERE id = ?
         RETURNING *
       `;
+      values.push(id);
 
-      const result = await db.raw(query, [
-        username,
-        fullname,
-        email,
-        password,
-        role_id,
-        jobPosition_id,
-        id,
-      ]);
+      const result = await db.raw(query, values);
 
       if (result.rows.length === 0) {
-        throw new Error("User  not found");
+        return {
+          status: "error",
+          message: "User not found",
+        };
       }
 
-      return result.rows[0];
+      return {
+        status: "success",
+        message: "User updated successfully",
+        data: result.rows[0],
+      };
     } catch (error) {
-      throw new Error(`Error updating user: ${error.message}`);
+      return {
+        status: "error",
+        message: `Error updating user: ${error.message}`,
+      };
     }
   }
 
   async delete(id) {
     try {
-      const query = `
-        DELETE FROM Users
-        WHERE id = ?
-        RETURNING *
-      `;
-
+      const query = `DELETE FROM "Users" WHERE id = ? RETURNING *`;
       const result = await db.raw(query, [id]);
 
       if (result.rows.length === 0) {
-        throw new Error("User  not found");
+        return {
+          status: "error",
+          message: "User not found",
+        };
       }
 
-      return { message: "User  deleted successfully" };
+      return {
+        status: "success",
+        message: "User deleted successfully",
+      };
     } catch (error) {
-      throw new Error(`Error deleting user: ${error.message}`);
+      return {
+        status: "error",
+        message: `Error deleting user: ${error.message}`,
+      };
     }
+  }
+
+  async comparePassword(inputPassword, hashedPassword) {
+    return bcrypt.compare(inputPassword, hashedPassword);
   }
 }
