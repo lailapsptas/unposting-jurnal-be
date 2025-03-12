@@ -1,6 +1,58 @@
 import db from "../../db/knex.js";
 
 export class PettyCashesService {
+  // Helper function to safely parse float values
+  safeParseFloat(value) {
+    const stringValue = String(value || "0").replace(/,/g, ".");
+    const numValue = parseFloat(stringValue);
+    return isNaN(numValue) ? 0 : Number(numValue.toFixed(2));
+  }
+
+  // Helper function to validate debit and credit
+  validateDebitCredit(debit, credit) {
+    debit = this.safeParseFloat(debit);
+    credit = this.safeParseFloat(credit);
+
+    if (debit !== 0 && credit !== 0) {
+      throw new Error("Only one of debit or credit should have non-zero value");
+    }
+
+    return { debit, credit };
+  }
+
+  // Helper function to update balance for all entries on a specific date
+  async updateBalanceForDate(transaction_date, trx) {
+    const getAllEntriesQuery = `
+      SELECT id, debit, credit
+      FROM "PettyCashes"
+      WHERE transaction_date = ?
+      ORDER BY id ASC
+    `;
+
+    const allEntriesResult = await trx.raw(getAllEntriesQuery, [
+      transaction_date,
+    ]);
+    const allEntries = allEntriesResult.rows;
+
+    let currentBalance = 0;
+
+    for (const entry of allEntries) {
+      const entryDebit = this.safeParseFloat(entry.debit);
+      const entryCredit = this.safeParseFloat(entry.credit);
+
+      currentBalance = this.safeParseFloat(
+        currentBalance + entryDebit - entryCredit
+      );
+
+      await trx.raw(`UPDATE "PettyCashes" SET balance = ? WHERE id = ?`, [
+        currentBalance,
+        entry.id,
+      ]);
+    }
+
+    return currentBalance;
+  }
+
   async create(data) {
     try {
       const {
@@ -10,32 +62,68 @@ export class PettyCashesService {
         transaction_date,
         debit,
         credit,
-        balance,
-        isapproved,
-        approved_date,
+        user_id,
       } = data;
-      const query = `
-        INSERT INTO "PettyCashes" (ledger_id, account_code, description, transaction_date, debit, credit, balance, "createdAt", "updatedAt", isapproved, approved_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
-        RETURNING *
-      `;
 
-      const result = await db.raw(query, [
-        ledger_id,
-        account_code,
-        description,
-        transaction_date,
-        debit,
-        credit,
-        balance,
-        isapproved,
-        approved_date,
-      ]);
-      return {
-        status: "success",
-        message: "Petty cash created successfully",
-        data: result.rows[0],
-      };
+      // Validate required fields
+      if (!account_code || !transaction_date) {
+        throw new Error(
+          "Missing required fields: account_code and transaction_date are required"
+        );
+      }
+
+      // Check if user_id is provided
+      if (!user_id) {
+        throw new Error("user_id is required");
+      }
+
+      // Validate debit and credit
+      const { debit: validatedDebit, credit: validatedCredit } =
+        this.validateDebitCredit(debit, credit);
+
+      return await db.transaction(async (trx) => {
+        // Insert the new entry with initial balance of 0
+        const createQuery = `
+          INSERT INTO "PettyCashes" (
+            ledger_id, 
+            account_code, 
+            description, 
+            transaction_date, 
+            debit, 
+            credit,
+            balance,
+            user_id,
+            "createdAt",
+            "updatedAt",
+            isapproved,
+            approved_date
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
+          RETURNING *
+        `;
+
+        const createResult = await trx.raw(createQuery, [
+          ledger_id || null,
+          account_code,
+          description || null,
+          transaction_date,
+          validatedDebit,
+          validatedCredit,
+          0, // Initial balance will be calculated
+          user_id,
+          data.isapproved || false,
+          data.approved_date || null,
+        ]);
+
+        // Update balances for all entries on this date
+        await this.updateBalanceForDate(transaction_date, trx);
+
+        return {
+          status: "success",
+          message: "Petty cash created successfully",
+          data: createResult.rows[0],
+        };
+      });
     } catch (error) {
       throw new Error(`Error creating petty cash: ${error.message}`);
     }
@@ -43,8 +131,24 @@ export class PettyCashesService {
 
   async findAll() {
     try {
-      const query = `SELECT * FROM "PettyCashes" ORDER BY id ASC`;
+      // Mengasumsikan bahwa nama kolom foreign key yang benar adalah "user_id" bukan "users_id"
+      const query = `
+        SELECT 
+          "PettyCashes".*,
+          json_build_array(
+            json_build_object(
+              'id', "Users".id,
+              'name', "Users".full_name,
+              'email', "Users".email
+            )
+          ) as users
+        FROM "PettyCashes"
+        LEFT JOIN "Users" ON "PettyCashes"."user_id" = "Users".id
+        ORDER BY "PettyCashes".id ASC
+      `;
+
       const result = await db.raw(query);
+
       return {
         status: "success",
         message: "Petty cashes fetched successfully",
@@ -57,7 +161,22 @@ export class PettyCashesService {
 
   async findById(id) {
     try {
-      const query = `SELECT * FROM "PettyCashes" WHERE id = ?`;
+      // Modified query without using the "name" alias
+      const query = `
+        SELECT 
+          "PettyCashes".*,
+          json_build_array(
+            json_build_object(
+              'id', "Users".id,
+              'name', "Users".full_name,
+              'email', "Users".email
+            )
+          ) as users
+        FROM "PettyCashes"
+        LEFT JOIN "Users" ON "PettyCashes".user_id = "Users".id
+        WHERE "PettyCashes".id = ?
+      `;
+
       const result = await db.raw(query, [id]);
 
       if (!result.rows[0]) {
@@ -67,6 +186,7 @@ export class PettyCashesService {
           data: null,
         };
       }
+
       return {
         status: "success",
         message: "Petty cash fetched successfully",
@@ -79,77 +199,128 @@ export class PettyCashesService {
 
   async update(id, data) {
     try {
-      const updateFields = [];
-      const values = [];
+      return await db.transaction(async (trx) => {
+        // First get the current entry to check if it exists and get its current transaction_date
+        const currentEntryQuery = `
+          SELECT * FROM "PettyCashes"
+          WHERE id = ?
+        `;
+        const currentEntryResult = await trx.raw(currentEntryQuery, [id]);
 
-      if (data.ledger_id) {
-        updateFields.push(`ledger_id = ?`);
-        values.push(data.ledger_id);
-      }
-      if (data.account_code) {
-        updateFields.push(`account_code = ?`);
-        values.push(data.account_code);
-      }
-      if (data.description) {
-        updateFields.push(`description = ?`);
-        values.push(data.description);
-      }
-      if (data.transaction_date) {
-        updateFields.push(`transaction_date = ?`);
-        values.push(data.transaction_date);
-      }
-      if (data.debit) {
-        updateFields.push(`debit = ?`);
-        values.push(data.debit);
-      }
-      if (data.credit) {
-        updateFields.push(`credit = ?`);
-        values.push(data.credit);
-      }
-      if (data.balance) {
-        updateFields.push(`balance = ?`);
-        values.push(data.balance);
-      }
-      if (data.isapproved !== undefined) {
-        updateFields.push(`isapproved = ?`);
-        values.push(data.isapproved);
-      }
-      if (data.approved_date) {
-        updateFields.push(`approved_date = ?`);
-        values.push(data.approved_date);
-      }
+        if (currentEntryResult.rows.length === 0) {
+          return {
+            status: "error",
+            message: "Petty cash not found",
+          };
+        }
 
-      updateFields.push(`"updatedAt" = CURRENT_TIMESTAMP`);
+        const currentEntry = currentEntryResult.rows[0];
+        const oldTransactionDate = currentEntry.transaction_date;
+        const updateFields = [];
+        const values = [];
 
-      if (updateFields.length === 0) {
+        // Handle each possible field update
+        if (data.ledger_id) {
+          updateFields.push(`ledger_id = ?`);
+          values.push(data.ledger_id);
+        }
+
+        if (data.account_code) {
+          updateFields.push(`account_code = ?`);
+          values.push(data.account_code);
+        }
+
+        if (data.description !== undefined) {
+          updateFields.push(`description = ?`);
+          values.push(data.description);
+        }
+
+        if (data.transaction_date) {
+          updateFields.push(`transaction_date = ?`);
+          values.push(data.transaction_date);
+        }
+
+        // Handle debit and credit with validation
+        let debit = currentEntry.debit;
+        let credit = currentEntry.credit;
+
+        if (data.debit !== undefined || data.credit !== undefined) {
+          const newDebit =
+            data.debit !== undefined ? data.debit : currentEntry.debit;
+          const newCredit =
+            data.credit !== undefined ? data.credit : currentEntry.credit;
+
+          const validated = this.validateDebitCredit(newDebit, newCredit);
+          debit = validated.debit;
+          credit = validated.credit;
+
+          updateFields.push(`debit = ?`);
+          values.push(debit);
+          updateFields.push(`credit = ?`);
+          values.push(credit);
+        }
+
+        if (data.isapproved !== undefined) {
+          updateFields.push(`isapproved = ?`);
+          values.push(data.isapproved);
+        }
+
+        if (data.approved_date) {
+          updateFields.push(`approved_date = ?`);
+          values.push(data.approved_date);
+        }
+
+        if (data.user_id) {
+          updateFields.push(`user_id = ?`);
+          values.push(data.user_id);
+        }
+
+        updateFields.push(`"updatedAt" = CURRENT_TIMESTAMP`);
+
+        if (updateFields.length === 0) {
+          return {
+            status: "error",
+            message: "No fields to update",
+          };
+        }
+
+        // Update the entry
+        const query = `
+          UPDATE "PettyCashes" 
+          SET ${updateFields.join(", ")}
+          WHERE id = ?
+          RETURNING *
+        `;
+
+        values.push(id);
+        const result = await trx.raw(query, values);
+
+        if (result.rows.length === 0) {
+          return {
+            status: "error",
+            message: "Failed to update petty cash",
+          };
+        }
+
+        // Update balances for all entries on the affected dates
+        const newTransactionDate = data.transaction_date || oldTransactionDate;
+
+        // If transaction date changed, update balances for both old and new dates
+        if (
+          data.transaction_date &&
+          data.transaction_date !== oldTransactionDate
+        ) {
+          await this.updateBalanceForDate(oldTransactionDate, trx);
+        }
+
+        await this.updateBalanceForDate(newTransactionDate, trx);
+
         return {
-          status: "error",
-          message: "No fields to update",
+          status: "success",
+          message: "Petty cash updated successfully",
+          data: result.rows[0],
         };
-      }
-
-      const query = `
-        UPDATE "PettyCashes" 
-        SET ${updateFields.join(", ")}
-        WHERE id = ?
-        RETURNING *
-      `;
-
-      values.push(id);
-      const result = await db.raw(query, values);
-
-      if (result.rows.length === 0) {
-        return {
-          status: "error",
-          message: "Petty cash not found",
-        };
-      }
-
-      return {
-        status: "success",
-        message: "Petty cash updated successfully",
-        data: result.rows[0],
-      };
+      });
     } catch (error) {
       throw new Error(`Error updating petty cash: ${error.message}`);
     }
@@ -157,235 +328,45 @@ export class PettyCashesService {
 
   async delete(id) {
     try {
-      const query = `DELETE FROM "PettyCashes" WHERE id = ? RETURNING *`;
-      const result = await db.raw(query, [id]);
+      return await db.transaction(async (trx) => {
+        // First get the transaction date of the entry
+        const getDateQuery = `SELECT transaction_date FROM "PettyCashes" WHERE id = ?`;
+        const dateResult = await trx.raw(getDateQuery, [id]);
 
-      if (result.rows.length === 0) {
+        if (dateResult.rows.length === 0) {
+          return {
+            status: "error",
+            message: "Petty cash not found",
+          };
+        }
+
+        const transactionDate = dateResult.rows[0].transaction_date;
+
+        // Delete the entry
+        const query = `DELETE FROM "PettyCashes" WHERE id = ? RETURNING *`;
+        const result = await trx.raw(query, [id]);
+
+        if (result.rows.length === 0) {
+          return {
+            status: "error",
+            message: "Failed to delete petty cash",
+          };
+        }
+
+        // Update balances for remaining entries on this date
+        await this.updateBalanceForDate(transactionDate, trx);
+
         return {
-          status: "error",
-          message: "Petty cash not found",
+          status: "success",
+          message: "Petty cash deleted successfully",
         };
-      }
-
-      return {
-        status: "success",
-        message: "Petty cash deleted successfully",
-      };
+      });
     } catch (error) {
       throw new Error(`Error deleting petty cash: ${error.message}`);
     }
   }
 
-  async createOrUpdatePettyCashes(data) {
-    try {
-      const { transaction_date, createEntries = [], updateEntries = [] } = data;
-
-      if (!transaction_date) {
-        throw new Error("Missing required field: transaction_date");
-      }
-
-      if (!Array.isArray(createEntries) || !Array.isArray(updateEntries)) {
-        throw new Error("createEntries and updateEntries must be arrays");
-      }
-
-      const safeParseFloat = (value) => {
-        const stringValue = String(value || "0").replace(/,/g, ".");
-        const numValue = parseFloat(stringValue);
-        return isNaN(numValue) ? 0 : Number(numValue.toFixed(2));
-      };
-
-      const createdEntries = [];
-      const updatedEntries = [];
-
-      await db.transaction(async (trx) => {
-        if (updateEntries.length > 0) {
-          for (const entry of updateEntries) {
-            if (!entry.id) {
-              throw new Error("Missing ID in update entries");
-            }
-
-            const currentEntryQuery = `
-              SELECT id, debit, credit, balance FROM "PettyCashes"
-              WHERE id = ?
-            `;
-            const currentEntryResult = await trx.raw(currentEntryQuery, [
-              entry.id,
-            ]);
-
-            if (currentEntryResult.rows.length === 0) {
-              throw new Error(`Entry with id ${entry.id} not found`);
-            }
-
-            const currentEntry = currentEntryResult.rows[0];
-
-            const debit =
-              entry.debit !== undefined
-                ? safeParseFloat(entry.debit)
-                : currentEntry.debit;
-            const credit =
-              entry.credit !== undefined
-                ? safeParseFloat(entry.credit)
-                : currentEntry.credit;
-
-            if (debit !== 0 && credit !== 0) {
-              throw new Error(
-                "Only one of debit or credit should have non-zero value in each entry"
-              );
-            }
-
-            const updateFields = [];
-            const values = [];
-
-            if (entry.account_code) {
-              updateFields.push(`account_code = ?`);
-              values.push(entry.account_code);
-            }
-
-            if (entry.description !== undefined) {
-              updateFields.push(`description = ?`);
-              values.push(entry.description);
-            }
-
-            if (entry.transaction_date) {
-              updateFields.push(`transaction_date = ?`);
-              values.push(entry.transaction_date);
-            }
-
-            if (debit !== null) {
-              updateFields.push(`debit = ?`);
-              values.push(debit);
-            }
-
-            if (credit !== null) {
-              updateFields.push(`credit = ?`);
-              values.push(credit);
-            }
-
-            if (updateFields.length > 0) {
-              updateFields.push(`"updatedAt" = CURRENT_TIMESTAMP`);
-            } else {
-              continue;
-            }
-
-            values.push(entry.id);
-
-            const updateQuery = `
-              UPDATE "PettyCashes" 
-              SET ${updateFields.join(", ")}
-              WHERE id = ?
-              RETURNING *
-            `;
-
-            const updateResult = await trx.raw(updateQuery, values);
-
-            if (updateResult.rows.length === 0) {
-              throw new Error(`Failed to update entry with id ${entry.id}`);
-            }
-
-            updatedEntries.push(...updateResult.rows);
-          }
-        }
-
-        if (createEntries.length > 0) {
-          const validatedCreateData = createEntries.map((entry) => {
-            if (!entry.account_code || !entry.transaction_date) {
-              throw new Error("Missing required fields in create entries");
-            }
-
-            const debit = safeParseFloat(entry.debit);
-            const credit = safeParseFloat(entry.credit);
-
-            if (debit !== 0 && credit !== 0) {
-              throw new Error(
-                "Only one of debit or credit should be provided in each entry"
-              );
-            }
-
-            return {
-              account_code: entry.account_code,
-              description: entry.description || null,
-              transaction_date: entry.transaction_date,
-              debit: debit,
-              credit: credit,
-              balance: 0,
-            };
-          });
-
-          const createQuery = `
-            INSERT INTO "PettyCashes" (
-              account_code, 
-              description, 
-              transaction_date, 
-              debit, 
-              credit,
-              balance,
-              "createdAt"
-            )
-            VALUES ${validatedCreateData
-              .map(() => "(?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)")
-              .join(", ")}
-            RETURNING *
-          `;
-
-          const createValues = validatedCreateData.flatMap((entry) => [
-            entry.account_code,
-            entry.description,
-            entry.transaction_date,
-            entry.debit,
-            entry.credit,
-            entry.balance,
-          ]);
-
-          const createResult = await trx.raw(createQuery, createValues);
-          createdEntries.push(...createResult.rows);
-        }
-
-        const getAllEntriesQuery = `
-          SELECT id, debit, credit
-          FROM "PettyCashes"
-          WHERE transaction_date = ?
-          ORDER BY id ASC
-        `;
-
-        const allEntriesResult = await trx.raw(getAllEntriesQuery, [
-          transaction_date,
-        ]);
-
-        const allEntries = allEntriesResult.rows;
-
-        let currentBalance = 0;
-
-        for (const entry of allEntries) {
-          const entryDebit = safeParseFloat(entry.debit);
-          const entryCredit = safeParseFloat(entry.credit);
-
-          currentBalance = safeParseFloat(
-            currentBalance + entryDebit - entryCredit
-          );
-
-          await trx.raw(`UPDATE "PettyCashes" SET balance = ? WHERE id = ?`, [
-            currentBalance,
-            entry.id,
-          ]);
-        }
-      });
-
-      return {
-        status: "success",
-        message: "Petty cashes created and updated successfully",
-        data: {
-          created: createdEntries,
-          updated: updatedEntries,
-        },
-      };
-    } catch (error) {
-      throw new Error(
-        `Error creating or updating petty cashes: ${error.message}`
-      );
-    }
-  }
-
-  async approvedPettyCash(id, approvedData) {
+  async approvePettyCash(id, approvedData) {
     try {
       const { isapproved } = approvedData;
 
