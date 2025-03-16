@@ -11,4 +11,9 @@ router.put("/:id", middleware.login, GeneralLedgersControllers.update);
 router.delete("/:id", middleware.login, GeneralLedgersControllers.delete);
 router.put("/post/:id", middleware.login, GeneralLedgersControllers.updatePost);
 
+router.get(
+  "/recap/:year/:month",
+  middleware.login,
+  GeneralLedgersControllers.getMonthlyRecap
+);
 export default router;

@@ -344,4 +344,94 @@ export class GeneralLedgersService {
       throw new Error(`Error posting general ledger: ${error.message}`);
     }
   }
+
+  async getMonthlyRecap(year, month) {
+    try {
+      const numYear = parseInt(year, 10);
+      const numMonth = parseInt(month, 10);
+
+      if (isNaN(numYear) || isNaN(numMonth) || numMonth < 1 || numMonth > 12) {
+        throw new Error("Invalid year or month input");
+      }
+
+      const startDate = `${numYear}-${String(numMonth).padStart(2, "0")}-01`;
+      const lastDay = new Date(numYear, numMonth, 0).getDate();
+      const endDate = `${numYear}-${String(numMonth).padStart(
+        2,
+        "0"
+      )}-${lastDay}`;
+
+      const query = `
+      SELECT 
+        id,
+        transaction_date,
+        transaction_code,
+        description,
+        total_debit,
+        total_credit,
+        total_balance,
+        remaining_balance
+      FROM "GeneralLedgers"
+      WHERE 
+        transaction_date >= ? AND 
+        transaction_date <= ? AND
+        "isPosting" = true
+      ORDER BY transaction_date ASC
+    `;
+
+      const result = await db.raw(query, [startDate, endDate]);
+      const dailyEntries = result.rows;
+
+      let monthlyTotalDebit = 0;
+      let monthlyTotalCredit = 0;
+
+      const formattedDailyEntries = dailyEntries.map((entry) => {
+        monthlyTotalDebit += parseFloat(entry.total_debit);
+        monthlyTotalCredit += parseFloat(entry.total_credit);
+
+        const date = new Date(entry.transaction_date);
+        const formattedDate = `${date.getDate().toString().padStart(2, "0")}.${(
+          date.getMonth() + 1
+        )
+          .toString()
+          .padStart(2, "0")}.${date.getFullYear().toString().slice(-2)}`;
+
+        return {
+          date: formattedDate,
+          transaction_date: entry.transaction_date,
+          transaction_code: entry.transaction_code,
+          description: entry.description,
+          debit: parseFloat(entry.total_debit),
+          credit: parseFloat(entry.total_credit),
+        };
+      });
+
+      const monthlyBalance = monthlyTotalDebit - monthlyTotalCredit;
+      const isBalanced = Math.abs(monthlyBalance) < 0.001; // Account for floating point precision
+
+      return {
+        status: "success",
+        message: "Monthly recapitulation generated successfully",
+        data: {
+          year: numYear,
+          month: numMonth,
+          monthName: new Date(numYear, numMonth - 1, 1).toLocaleString(
+            "default",
+            { month: "long" }
+          ),
+          dailyEntries: formattedDailyEntries,
+          summary: {
+            totalDebit: monthlyTotalDebit,
+            totalCredit: monthlyTotalCredit,
+            balance: monthlyBalance,
+            isBalanced: isBalanced,
+          },
+        },
+      };
+    } catch (error) {
+      throw new Error(
+        `Error generating monthly recapitulation: ${error.message}`
+      );
+    }
+  }
 }

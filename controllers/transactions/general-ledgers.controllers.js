@@ -84,4 +84,18 @@ export class GeneralLedgersControllers {
       res.status(500).json({ message: error.message });
     }
   }
+
+  static async getMonthlyRecap(req, res) {
+    try {
+      const { year, month } = req.params;
+      const recap =
+        await GeneralLedgersControllers.generalLedgersService.getMonthlyRecap(
+          year,
+          month
+        );
+      res.status(200).json(recap);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  }
 }

@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  app:
+    image: express/unposting-jurnal-be-1.0.0:prod
+    container_name: unposting-jurnal-be
+    environment:
+      - NODE_ENV=production
+      - DB_HOST_PRODUCTION=host.docker.internal
+      - DB_PORT_PRODUCTION=5432
+      - DB_USER_PRODUCTION=postgres
+      - DB_PWD_PRODUCTION=admin
+      - DB_NAME_PRODUCTION=unposting_jurnal_prod
+    ports:
+      - "3001:3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

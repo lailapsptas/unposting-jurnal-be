@@ -16,7 +16,7 @@ export async function up(knex) {
               "updatedAt" TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             
-            CREATE TRIGGER set_timestamp_reports
+            CREATE TRIGGER set_timestamp
             BEFORE UPDATE ON "GeneralLedgers"
             FOR EACH ROW
             EXECUTE FUNCTION update_timestamp();
@@ -25,7 +25,7 @@ export async function up(knex) {
 
 export async function down(knex) {
   await knex.raw(`
-            DROP TRIGGER IF EXISTS set_timestamp_reports ON "GeneralLedgers";
+            DROP TRIGGER IF EXISTS set_timestamp ON "GeneralLedgers";
             DROP TABLE IF EXISTS "GeneralLedgers";
         `);
 }
