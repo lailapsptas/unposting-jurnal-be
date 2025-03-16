@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   app:
-    image: express/unposting-jurnal-be-1.0.0:prod
+    image: express/unposting-jurnal-be-prod:v1.0.0
     container_name: unposting-jurnal-be
     environment:
       - NODE_ENV=production

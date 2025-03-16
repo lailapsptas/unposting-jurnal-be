@@ -5,7 +5,7 @@ services:
     build:
       context: .
       target: development
-    image: express/unposting-jurnal-be-1.0.0:dev
+    image: express/unposting-jurnal-be-dev:v1.0.0
     container_name: unposting-jurnal-be-dev
     restart: unless-stopped
     environment:

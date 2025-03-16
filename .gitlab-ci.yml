@@ -1,0 +1,85 @@
+stages:
+  - build
+  - publish
+  - deploy
+
+variables:
+  DOCKER_IMAGE_DEV: express/unposting-jurnal-be-dev
+  DOCKER_IMAGE_PROD: express/unposting-jurnal-be-prod
+  DOCKER_TAG: v1.0.0
+
+build-job:
+  stage: build
+  script:
+    - echo "Building the application..."
+    - docker build --target development -t $DOCKER_IMAGE_DEV:$DOCKER_TAG .
+    - docker build --target production -t $DOCKER_IMAGE_PROD:$DOCKER_TAG .
+    - echo "Build complete."
+  only:
+    - main
+
+publish-development-job:
+  stage: publish
+  image: docker:latest
+  services:
+    - docker:24.0.5-dind
+  before_script:
+    - echo $DOCKER_TOKEN | docker login -u $REGISTRY_USER --password-stdin
+  script:
+    - echo "Publishing development image..."
+    - docker tag $DOCKER_IMAGE_DEV:$DOCKER_TAG $REGISTRY_USER/$DOCKER_IMAGE_DEV:$DOCKER_TAG
+    - docker push $REGISTRY_USER/$DOCKER_IMAGE_DEV:$DOCKER_TAG
+    - echo "Development image successfully pushed."
+  only:
+    - development
+
+publish-production-job:
+  stage: publish
+  image: docker:latest
+  services:
+    - docker:24.0.5-dind
+  before_script:
+    - echo $DOCKER_TOKEN | docker login -u $REGISTRY_USER --password-stdin
+  script:
+    - echo "Publishing production image..."
+    - docker tag $DOCKER_IMAGE_PROD:$DOCKER_TAG $REGISTRY_USER/$DOCKER_IMAGE_PROD:$DOCKER_TAG
+    - docker push $REGISTRY_USER/$DOCKER_IMAGE_PROD:$DOCKER_TAG
+    - echo "Production image successfully pushed."
+  only:
+    - main
+
+deploy-development-job:
+  stage: deploy
+  image: docker:latest
+  when: manual
+  before_script:
+    - chmod 600 $SSH_PRIVATE_KEY
+    - apk update && apk add openssh-client
+  script:
+    - echo "Deploying development application..."
+    - scp -i $SSH_PRIVATE_KEY docker-compose.dev $HOST_USERNAME@$HOST_ADDRESS:/path/to/your/project/
+    - ssh -i $SSH_PRIVATE_KEY $HOST_USERNAME@$HOST_ADDRESS "
+      cd /path/to/your/project &&
+      docker-compose -f docker-compose.dev down &&
+      docker-compose -f docker-compose.dev up -d"
+    - echo "Development application successfully deployed."
+  only:
+    - development
+
+deploy-production-job:
+  stage: deploy
+  image: docker:latest
+  when: manual
+  before_script:
+    - chmod 600 $SSH_PRIVATE_KEY
+    - apk update && apk add openssh-client
+  script:
+    - echo "Deploying production application..."
+    - scp -i $SSH_PRIVATE_KEY docker-compose.prod $HOST_USERNAME@$HOST_ADDRESS:/path/to/your/project/
+    - ssh -i $SSH_PRIVATE_KEY $HOST_USERNAME@$HOST_ADDRESS "
+      cd /path/to/your/project &&
+      docker-compose -f docker-compose.prod down &&
+      docker-compose -f docker-compose.prod up -d"
+    - echo "Production application successfully deployed."
+  only:
+    - main
